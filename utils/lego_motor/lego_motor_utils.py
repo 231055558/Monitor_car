@@ -9,6 +9,9 @@ import json
 # 全局端口管理
 _used_ports = set()
 
+# 全局电机实例字典
+_active_motors = {}
+
 class MotorController:
     def __init__(self, port='A', wheel_circumference=17.5):
         """
@@ -90,6 +93,7 @@ def run_for_turns(motor, turns, speed=50, direction=1):
     degrees = turns * 360
     adjusted_speed = speed * direction
     motor.motor.run_for_degrees(degrees, abs(adjusted_speed))
+    
 
 def run_to_position(motor, position, speed=50, direction='shortest'):
     """
@@ -180,6 +184,23 @@ def _motor_thread(motor, action, *args, **kwargs):
     :return: None
     """
     action(motor, *args, **kwargs)
+
+def create_multiple_motors(ports, wheel_circumferences=None):
+    """
+    创建多个电机控制器
+    :param ports: 电机端口列表，如 ['A', 'B', 'C']
+    :param wheel_circumferences: 轮子周长列表（厘米），如果为None则使用默认值
+    :return: MotorController实例列表
+    """
+    if wheel_circumferences is None:
+        wheel_circumferences = [17.5] * len(ports)
+    
+    motors = []
+    for port, wheel_circumference in zip(ports, wheel_circumferences):
+        motor = create_motor(port, wheel_circumference)
+        motors.append(motor)
+    
+    return motors
 
 def run_motors_for_turns(motors, turns, speeds=None, directions=None):
     """
@@ -433,6 +454,14 @@ def test_motor_control():
         result = execute_motor_command(command)
         print(f"创建电机结果: {result}")
         
+        # 测试多电机初始化
+        command = json.dumps({
+            'type': 'create_multiple_motors',
+            'ports': ['B', 'C']
+        })
+        result = execute_motor_command(command)
+        print(f"创建多电机结果: {result}")
+        
         print("\n1. 测试按圈数旋转")
         command = json.dumps({
             'type': 'run_for_turns',
@@ -498,14 +527,6 @@ def test_motor_control():
         result = execute_motor_command(command)
         print(f"获取位置结果: {result}")
         
-        # 释放单电机端口
-        command = json.dumps({
-            'type': 'release',
-            'port': 'A'
-        })
-        result = execute_motor_command(command)
-        print(f"释放电机结果: {result}")
-        
         print("\n单电机测试完成！")
     except Exception as e:
         print(f"单电机测试出错: {e}")
@@ -570,14 +591,6 @@ def test_motor_control():
         result = execute_motor_command(command)
         print(f"获取多电机位置结果: {result}")
         
-        # 释放多电机端口
-        command = json.dumps({
-            'type': 'release_all_ports'
-        })
-        result = execute_motor_command(command)
-        print(f"释放所有端口结果: {result}")
-        
-        print("\n多电机测试完成！")
     except Exception as e:
         print(f"多电机测试出错: {e}")
         # 确保释放端口
@@ -759,6 +772,7 @@ def test_multi_motor():
         except:
             pass
 
+
 def execute_motor_command(command_json):
     """
     执行从JSON接收到的电机控制命令
@@ -769,6 +783,8 @@ def execute_motor_command(command_json):
     返回:
         dict: 包含执行结果的字典
     """
+    global _active_motors
+    
     try:
         # 解析JSON命令
         command = json.loads(command_json)
@@ -783,13 +799,44 @@ def execute_motor_command(command_json):
         
         # 根据命令类型执行相应操作
         if command_type == 'create_motor':
+            # 检查电机是否已存在
+            if port in _active_motors:
+                return {'success': True, 'message': f'电机 {port} 已存在'}
+            
             # 创建电机
             motor = create_motor(port)
+            _active_motors[port] = motor
             return {'success': True, 'message': f'电机 {port} 创建成功'}
+            
+        elif command_type == 'create_multiple_motors':
+            # 获取端口列表
+            ports = command.get('ports', ['A', 'B'])
+            wheel_circumferences = command.get('wheel_circumferences', None)
+            
+            # 检查是否所有电机都已存在
+            all_exist = all(p in _active_motors for p in ports)
+            if all_exist:
+                return {'success': True, 'message': f'电机 {ports} 已存在'}
+            
+            # 创建不存在的电机
+            created_ports = []
+            for p in ports:
+                if p not in _active_motors:
+                    motor = create_motor(p)
+                    _active_motors[p] = motor
+                    created_ports.append(p)
+            
+            if created_ports:
+                return {'success': True, 'message': f'电机 {created_ports} 创建成功'}
+            else:
+                return {'success': True, 'message': f'所有电机 {ports} 已存在'}
             
         elif command_type == 'run_for_turns':
             # 按圈数运行
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             turns = command.get('turns', 1)
             speed = command.get('speed', 50)
             direction = command.get('direction', 1)
@@ -798,7 +845,10 @@ def execute_motor_command(command_json):
             
         elif command_type == 'run_to_position':
             # 运行到指定位置
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             position = command.get('position', 0)
             speed = command.get('speed', 50)
             direction = command.get('direction', 'shortest')
@@ -807,7 +857,10 @@ def execute_motor_command(command_json):
             
         elif command_type == 'run_forever':
             # 一直运行
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             speed = command.get('speed', 50)
             direction = command.get('direction', 1)
             run_forever(motor, speed, direction)
@@ -815,7 +868,10 @@ def execute_motor_command(command_json):
             
         elif command_type == 'run_for_distance':
             # 按距离运行
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             distance = command.get('distance', 10)
             speed = command.get('speed', 50)
             direction = command.get('direction', 1)
@@ -824,26 +880,39 @@ def execute_motor_command(command_json):
             
         elif command_type == 'stop':
             # 停止电机
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             motor.stop()
             return {'success': True, 'message': f'电机 {port} 已停止'}
             
         elif command_type == 'get_speed':
             # 获取速度
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             speed = motor.get_speed()
             return {'success': True, 'speed': speed}
             
         elif command_type == 'get_position':
             # 获取位置
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             position = motor.get_position()
             return {'success': True, 'position': position}
             
         elif command_type == 'release':
             # 释放电机
-            motor = create_motor(port)
+            motor = _active_motors.get(port)
+            if not motor:
+                return {'success': False, 'error': f'电机 {port} 未创建'}
+                
             motor.release()
+            del _active_motors[port]
             return {'success': True, 'message': f'电机 {port} 已释放'}
             
         elif command_type == 'run_motors_for_turns':
@@ -853,7 +922,14 @@ def execute_motor_command(command_json):
             speeds = command.get('speeds', None)
             directions = command.get('directions', None)
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             run_motors_for_turns(motors, turns, speeds, directions)
             return {'success': True, 'message': f'电机 {ports} 运行 {turns} 圈'}
             
@@ -864,14 +940,29 @@ def execute_motor_command(command_json):
             speeds = command.get('speeds', None)
             direction = command.get('direction', 'shortest')
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             run_motors_to_positions(motors, positions, speeds, direction)
             return {'success': True, 'message': f'电机 {ports} 运行到位置 {positions}'}
             
         elif command_type == 'stop_motors':
             # 停止多个电机
             ports = command.get('ports', ['A', 'B'])
-            motors = [create_motor(p) for p in ports]
+            
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             stop_motors(motors)
             return {'success': True, 'message': f'电机 {ports} 已停止'}
             
@@ -881,7 +972,14 @@ def execute_motor_command(command_json):
             speeds = command.get('speeds', None)
             directions = command.get('directions', None)
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             threads = run_motors_forever(motors, speeds, directions)
             return {'success': True, 'message': f'电机 {ports} 持续运行', 'threads': len(threads)}
             
@@ -892,7 +990,14 @@ def execute_motor_command(command_json):
             speeds = command.get('speeds', None)
             directions = command.get('directions', None)
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             run_motors_for_distances(motors, distances, speeds, directions)
             return {'success': True, 'message': f'电机 {ports} 运行距离 {distances}'}
             
@@ -901,7 +1006,14 @@ def execute_motor_command(command_json):
             ports = command.get('ports', ['A', 'B'])
             directions = command.get('directions', None)
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             speeds = get_motors_speeds(motors, directions)
             return {'success': True, 'speeds': speeds}
             
@@ -909,13 +1021,22 @@ def execute_motor_command(command_json):
             # 获取多个电机的位置
             ports = command.get('ports', ['A', 'B'])
             
-            motors = [create_motor(p) for p in ports]
+            # 检查所有电机是否已创建
+            motors = []
+            for p in ports:
+                motor = _active_motors.get(p)
+                if not motor:
+                    return {'success': False, 'error': f'电机 {p} 未创建'}
+                motors.append(motor)
+                
             positions = get_motors_positions(motors)
             return {'success': True, 'positions': positions}
             
         elif command_type == 'release_all_ports':
             # 释放所有端口
-            release_all_ports()
+            for port, motor in list(_active_motors.items()):
+                motor.release()
+                del _active_motors[port]
             return {'success': True, 'message': '所有端口已释放'}
             
         else:

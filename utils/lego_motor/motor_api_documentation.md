@@ -21,6 +21,20 @@
 }
 ```
 
+### 创建多个电机
+
+```json
+{
+  "type": "create_multiple_motors",
+  "ports": ["B", "C"],
+  "wheel_circumferences": [17.5, 17.5]
+}
+```
+
+参数说明：
+- `ports`: 电机端口列表（默认为['A', 'B']）
+- `wheel_circumferences`: 轮子周长列表（厘米，默认为None，表示所有电机使用默认值17.5厘米）
+
 ### 按圈数运行
 
 ```json
@@ -268,6 +282,17 @@
 }
 ```
 
+## 电机实例管理
+
+本库实现了电机实例的持久化管理，避免重复创建电机实例导致的回弹问题。使用JSON命令接口时，电机实例会被自动管理：
+
+1. 首次使用某个端口时，会创建电机实例并存储在内部字典中
+2. 后续使用同一端口的命令会重用已创建的实例
+3. 使用`release`命令可以释放单个电机
+4. 使用`release_all_ports`命令可以释放所有电机
+
+这种方式可以确保电机的状态一致性，避免因重复创建实例导致的问题。
+
 ## 使用示例
 
 ### Python代码示例
@@ -280,6 +305,14 @@ from motor_utils import execute_motor_command
 command = json.dumps({
     'type': 'create_motor',
     'port': 'A'
+})
+result = execute_motor_command(command)
+print(result)
+
+# 创建多个电机
+command = json.dumps({
+    'type': 'create_multiple_motors',
+    'ports': ['B', 'C']
 })
 result = execute_motor_command(command)
 print(result)
@@ -325,6 +358,14 @@ print(result)
 import json
 from motor_utils import execute_motor_command
 
+# 创建多个电机
+command = json.dumps({
+    'type': 'create_multiple_motors',
+    'ports': ['A', 'B', 'C']
+})
+result = execute_motor_command(command)
+print(result)
+
 # 多电机按圈数运行
 command = json.dumps({
     'type': 'run_motors_for_turns',
@@ -366,4 +407,6 @@ print(result)
 2. 在执行命令前，确保电机已正确连接到指定端口。
 3. 使用完电机后，记得释放端口，以避免端口冲突。
 4. 对于持续运行的命令，需要手动调用停止命令来停止电机。
-5. 所有角度值都会被转换为整数，并且会被限制在0-359度范围内。 
+5. 所有角度值都会被转换为整数，并且会被限制在0-359度范围内。
+6. 使用JSON命令接口时，建议先创建电机，再进行控制操作。
+7. 多电机控制时，确保所有电机都已创建。 
